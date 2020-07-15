@@ -1,0 +1,98 @@
+name: release
+
+on:
+  push:
+    tags:
+    - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    - name: Create release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Create release url file
+      run: echo "${{ steps.create_release.outputs.upload_url }}" > release_url.txt
+
+    - name: Save release url file for publish
+      uses: actions/upload-artifact@v1
+      with:
+        name: release_url
+        path: release_url.txt
+
+  publish:
+    needs: [release]
+
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: true
+
+    - uses: goanpeca/setup-miniconda@v1
+      with:
+        auto-update-conda: true
+        python-version: '3.7'
+
+    - name: Install main
+      shell: bash -l {0}
+      run: |
+        pip install .
+
+    - name: Run pyinstaller
+      shell: bash -l {0}
+      run: |
+        pip install 'pyinstaller!=3.4'
+        pip install 'setuptools<45.0.0'
+        pyinstaller labelme.spec
+
+    - name: Load release url file from release job
+      uses: actions/download-artifact@v1
+      with:
+        name: release_url
+
+    - name: Get release file name & upload url
+      id: get_release_info
+      run: |
+        echo "::set-output name=file_name::labelme-${GITHUB_REF/\/refs\/tags\/v//}"
+        echo "::set-output name=upload_url::$(cat release_url/release_url.txt)"
+
+    - name: Upload release asset on macOS & Linux
+      id: upload_release_asset_macos_linux
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.get_release_info.outputs.upload_url }}
+        asset_path: ./dist/labelme
+        asset_name: ${{ steps.get_release_info.outputs.file_name }}-${{ runner.os }}
+        asset_content_type: application/octet-stream
+      if: ${{ runner.os }} != "Windows"
+
+    - name: Upload release asset on Windows
+      id: upload_release_asset_windows
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.get_release_info.outputs.upload_url }}
+        asset_path: ./dist/labelme.exe
+        asset_name: ${{ steps.get_release_info.outputs.file_name }}-${{ runner.os }}
+        asset_content_type: application/octet-stream
+      if: ${{ runner.os }} == "Windows"
